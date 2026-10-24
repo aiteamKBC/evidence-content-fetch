@@ -951,13 +951,18 @@ def _decoded_json(value, default):
     return default if value is None else value
 
 
-def _payload(review, api_meta=None, sections=None, old_data=None):
+def _payload(review, api_meta=None, sections=None, old_data=None, source_kind='odata'):
     previous = _decoded_json(old_data, {})
     if not isinstance(previous, dict):
         raise ReviewSyncError('Stored review data is not a JSON object')
     data = dict(previous)
     data.update({'aptem_learner_id': str(review['LearnerId']),
-                 'aptem_review_id': str(review['Id']), 'live_odata': review})
+                 'aptem_review_id': str(review['Id'])})
+    if source_kind == 'classic':
+        data['classic_review_extended'] = review['classic_extended']
+        data['visible_inventory_source'] = 'classic_ui'
+    else:
+        data['live_odata'] = review
     if api_meta is not None:
         # An earlier failed audit must not contradict the current capture.
         # The new manifest/section verification below is authoritative for
@@ -965,7 +970,8 @@ def _payload(review, api_meta=None, sections=None, old_data=None):
         data.pop('content_audit', None)
         verified = capture_is_verified(api_meta, sections)
         data.update(capture_version=CAPTURE_VERSION, content_capture_version=CAPTURE_VERSION,
-                    capture_source='odata+review-api', capture_verified=verified,
+                    capture_source=('classic-ui+review-api' if source_kind == 'classic'
+                                    else 'odata+review-api'), capture_verified=verified,
                     content_source_updated_at=review.get('UpdatedDate'))
         data['api_meta'] = api_meta
         data['sections'] = sections
@@ -1306,15 +1312,20 @@ def _merge_preserved_sections(sections, previous):
     return merged
 
 
-def save_live_review(review, learner_id, api_meta=None, sections=None):
+def save_live_review(review, learner_id, api_meta=None, sections=None, *, source_kind='odata'):
     """Atomic upsert; unavailable sections retain prior content and stay partial."""
     review_id = str(review['Id'])
+    if source_kind not in ('odata', 'classic'):
+        raise ReviewSyncError('Unknown review source kind')
     if (api_meta is None) != (sections is None):
         raise ReviewSyncError('Review content requires both manifest and section captures')
     if api_meta is not None:
         _validate_identity(api_meta, review_id, review['LearnerId'])
-    source_url = (f'{settings.APTEM_BASE_URL.rstrip("/")}/pwa/learners/'
-                  f'{review["LearnerId"]}/reviews/review-content/{review_id}')
+    if source_kind == 'classic':
+        source_url = f'{settings.APTEM_BASE_URL.rstrip("/")}/MWS.Review/Review/Get/{review_id}'
+    else:
+        source_url = (f'{settings.APTEM_BASE_URL.rstrip("/")}/pwa/learners/'
+                      f'{review["LearnerId"]}/reviews/review-content/{review_id}')
     with transaction.atomic(), connection.cursor() as cursor:
         cursor.execute('''SELECT id,learner_id,review_data FROM "Learner".reviews
             WHERE aptem_review_id=%s FOR UPDATE''', [review_id])
@@ -1336,7 +1347,7 @@ def save_live_review(review, learner_id, api_meta=None, sections=None):
                                  'fields': _decoded_json(fields, []),
                                  'tables': _decoded_json(tables, []), 'raw_text': text or ''})
             sections = _merge_preserved_sections(sections, previous)
-        data = _payload(review, api_meta, sections, old_data)
+        data = _payload(review, api_meta, sections, old_data, source_kind=source_kind)
         raw_text = None
         extraction = 'partial'
         error = 'Aptem metadata only; review content has not been verified.'

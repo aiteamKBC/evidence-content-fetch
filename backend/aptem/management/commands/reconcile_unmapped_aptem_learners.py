@@ -61,7 +61,17 @@ class Command(BaseCommand):
                 WHERE aptem_review_id IS NOT NULL''')
             stored = {str(row[0]): row[1] for row in cursor.fetchall()}
         live_ids = {str(row['Id']) for row in reviews}
-        historical_ids = sorted(set(stored)-live_ids, key=int)
+        # Aptem's live review IDs are numeric. Keep non-numeric local/test IDs
+        # out of the source-missing reconciliation instead of trying to sort
+        # them as integers (and, more importantly, never marking them absent
+        # from Aptem based only on a tenant inventory comparison).
+        non_numeric_stored = sorted(
+            review_id for review_id in set(stored) - live_ids
+            if not str(review_id).isdecimal()
+        )
+        historical_ids = sorted(
+            (set(stored) - live_ids) - set(non_numeric_stored), key=int
+        )
         if len(historical_ids) > 20:
             raise CommandError('Safety stop: unexpectedly many stored reviews are absent from Aptem')
 
@@ -96,6 +106,7 @@ class Command(BaseCommand):
             'aptem_identity_rows': len(user_by_id),
             'lms_profile_rows': len(lms_by_id),
             'historical_reviews': historical_ids,
+            'ignored_non_numeric_stored_reviews': non_numeric_stored,
         }
         if options['apply']:
             self.apply(safe_existing, create, user_by_id, lms_by_id, historical_ids)

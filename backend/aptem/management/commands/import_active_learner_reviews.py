@@ -77,12 +77,13 @@ def wait_review_list(page):
     return False
 
 
-def planned_for(page, learner_id, on_review=None):
+def planned_for(page, learner_id, on_review=None, verify_active=True):
     from playwright.sync_api import expect
     base = settings.APTEM_BASE_URL.rstrip('/')
     page.goto(f'{base}/pwa/learners/{learner_id}/dashboard', wait_until='domcontentloaded')
     check_session(page)
-    expect(page.get_by_text('Active', exact=True)).to_be_visible()
+    if verify_active:
+        expect(page.get_by_text('Active', exact=True)).to_be_visible()
     page.locator('[auto-id="admin-menu-horizontal-reviews"]').click()
     page.wait_for_url(f'**/learners/{learner_id}/reviews/upcoming')
     if wait_review_list(page):

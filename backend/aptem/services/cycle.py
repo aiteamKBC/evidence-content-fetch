@@ -139,6 +139,16 @@ class CycleService:
             scope = opts.get("scope") or ("all" if mode == "full" else "active")
 
             if not skip_reviews:
+                # Supplement learners from Created_users first, so any new enrolment
+                # that has an Aptem id is present before the review sync maps on it.
+                self.stage(
+                    stages,
+                    "reconcile_learners",
+                    lambda: _run_command(
+                        "reconcile_learners_from_created_users",
+                        apply=apply,
+                    ),
+                )
                 self.stage(
                     stages,
                     "reviews",
